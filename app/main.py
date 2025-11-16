@@ -200,6 +200,64 @@ async def refresh_session(username: str):
         )
 
 
+@app.get(
+    "/cookie-health/{username}",
+    tags=["Health"],
+    summary="Check cookie health for an account"
+)
+async def check_cookie_health(username: str):
+    """
+    Check if cookies are still valid for a Twitter account.
+    Returns cookie status and expiration warning.
+
+    Args:
+        username: Twitter username to check
+
+    Returns:
+        Cookie health status
+    """
+    try:
+        client = twitter_service.get_client(username)
+
+        if not client:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Account not initialized: {username}"
+            )
+
+        # Try to verify the session is still valid
+        try:
+            user = await client.user_by_screen_name(username)
+
+            return {
+                "username": username,
+                "cookie_status": "healthy",
+                "authenticated": True,
+                "account_name": user.name,
+                "message": "Cookies are valid and working"
+            }
+
+        except Exception as auth_error:
+            # Cookies likely expired
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "username": username,
+                    "cookie_status": "expired",
+                    "authenticated": False,
+                    "message": "Cookies have expired - please refresh",
+                    "error": str(auth_error)
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Failed to check cookie health: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     """Custom HTTP exception handler."""

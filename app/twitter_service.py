@@ -52,7 +52,14 @@ class TwitterService:
         """
         logger.info(f"Initializing account: {account.username}")
 
-        client = Client('en-US')
+        # Get proxy URL from settings
+        proxy_url = settings.get_proxy_url()
+        if proxy_url:
+            logger.info(f"Using proxy for account {account.username}")
+            client = Client('en-US', proxy=proxy_url)
+        else:
+            logger.warning(f"No proxy configured - using direct connection for {account.username}")
+            client = Client('en-US')
 
         # Try to load existing cookies from MongoDB
         cookies = cookie_db.load_cookies(account.username)

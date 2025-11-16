@@ -37,6 +37,12 @@ class Settings(BaseSettings):
         default='[{"username": "username", "email": "email@example.com", "password": "password"}]'
     )
 
+    # Proxy Configuration (Geonode)
+    proxy_server: str = Field(default="")
+    proxy_username: str = Field(default="")
+    proxy_password: str = Field(default="")
+    proxy_ports: str = Field(default="9001")
+
     # Application Settings
     app_host: str = Field(default="0.0.0.0")
     app_port: int = Field(default=8000)
@@ -90,6 +96,21 @@ class Settings(BaseSettings):
             f"mongodb+srv://{self.mongo_user}:{self.mongo_password}"
             f"@{self.mongo_host}/{self.mongo_db}"
             f"?authSource=admin&replicaSet=db-mongodb-fra1-53189&tls=true"
+        )
+
+    def get_proxy_url(self) -> str | None:
+        """
+        Construct proxy URL for Twikit client.
+
+        Returns:
+            Proxy URL in format http://username:password@server:port or None if not configured
+        """
+        if not self.proxy_server or not self.proxy_username or not self.proxy_password:
+            return None
+
+        return (
+            f"http://{self.proxy_username}:{self.proxy_password}"
+            f"@{self.proxy_server}:{self.proxy_ports}"
         )
 
 
