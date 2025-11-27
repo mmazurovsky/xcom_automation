@@ -104,3 +104,47 @@ class ErrorResponse(BaseModel):
                 "detail": "Invalid credentials for username: applyfirst_app"
             }
         }
+
+
+class BrowserCookie(BaseModel):
+    """Single cookie from browser export."""
+
+    name: str = Field(..., description="Cookie name")
+    value: str = Field(..., description="Cookie value")
+    domain: Optional[str] = Field(default=None, description="Cookie domain")
+    expirationDate: Optional[float] = Field(default=None, description="Expiration timestamp")
+    httpOnly: Optional[bool] = Field(default=None)
+    secure: Optional[bool] = Field(default=None)
+    path: Optional[str] = Field(default=None)
+    sameSite: Optional[str] = Field(default=None)
+    hostOnly: Optional[bool] = Field(default=None)
+    session: Optional[bool] = Field(default=None)
+    storeId: Optional[str] = Field(default=None)
+
+
+class UpdateCookiesRequest(BaseModel):
+    """Request model for updating cookies from browser export format."""
+
+    username: str = Field(..., description="Twitter username to update cookies for")
+    cookies: List[BrowserCookie] = Field(..., description="List of cookies from browser export")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "username": "applyfirst_app",
+                "cookies": [
+                    {
+                        "name": "auth_token",
+                        "value": "abc123...",
+                        "domain": ".x.com",
+                        "httpOnly": True,
+                        "secure": True
+                    },
+                    {
+                        "name": "ct0",
+                        "value": "def456...",
+                        "domain": ".x.com"
+                    }
+                ]
+            }
+        }

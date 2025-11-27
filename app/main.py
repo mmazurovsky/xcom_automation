@@ -15,7 +15,8 @@ from app.models import (
     TweetResponse,
     HealthResponse,
     RefreshSessionResponse,
-    ErrorResponse
+    ErrorResponse,
+    UpdateCookiesRequest
 )
 
 # Configure logging
@@ -194,6 +195,142 @@ async def refresh_session(username: str):
 
     except Exception as e:
         logger.error(f"Failed to refresh session: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post(
+    "/reload-cookies/{username}",
+    response_model=RefreshSessionResponse,
+    tags=["Twitter"],
+    summary="Reload cookies from MongoDB",
+    dependencies=[Depends(verify_api_key)]
+)
+async def reload_cookies(username: str):
+    """
+    Reload cookies from MongoDB into the in-memory client.
+    Use this after manually updating cookies in MongoDB (e.g., via update_cookies_mongo.py).
+
+    This does NOT re-authenticate - it just loads the existing cookies from the database.
+
+    Requires API key authentication via X-API-Key header.
+
+    Args:
+        username: Twitter username to reload cookies for
+
+    Returns:
+        RefreshSessionResponse with success status
+    """
+    try:
+        logger.info(f"Reloading cookies from database for account: {username}")
+
+        success = twitter_service.reload_cookies_from_db(username)
+
+        if success:
+            return RefreshSessionResponse(
+                success=True,
+                message="Cookies reloaded from database successfully",
+                username=username
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Failed to reload cookies for account: {username}. Account may not be initialized or no cookies in database."
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to reload cookies: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@app.post(
+    "/update-cookies",
+    response_model=RefreshSessionResponse,
+    tags=["Twitter"],
+    summary="Update cookies from browser export",
+    dependencies=[Depends(verify_api_key)]
+)
+async def update_cookies(request: UpdateCookiesRequest):
+    """
+    Update cookies for a Twitter account using browser-exported cookie format.
+
+    This endpoint:
+    1. Transforms browser cookies to twikit format
+    2. Saves them to MongoDB
+    3. Reloads them into the running client
+
+    No restart or redeployment required.
+
+    Requires API key authentication via X-API-Key header.
+
+    Args:
+        request: Contains username and list of browser-exported cookies
+
+    Returns:
+        RefreshSessionResponse with success status
+    """
+    try:
+        username = request.username
+        logger.info(f"[COOKIE UPDATE] Starting cookie update for account: {username}")
+
+        # Transform browser cookies to twikit format {name: value}
+        twikit_cookies = {}
+        for cookie in request.cookies:
+            twikit_cookies[cookie.name] = cookie.value
+
+        logger.info(f"[COOKIE UPDATE] Transformed {len(twikit_cookies)} cookies for {username}")
+
+        # Save to MongoDB
+        if not cookie_db.save_cookies(username, twikit_cookies):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save cookies to database for {username}"
+            )
+
+        logger.info(f"[COOKIE UPDATE] Saved {len(twikit_cookies)} cookies to database for {username}")
+
+        # Reload into running client or initialize if not yet initialized
+        is_existing_client = username in twitter_service.clients
+
+        if is_existing_client:
+            logger.info(f"[COOKIE UPDATE] Reloading cookies into existing client for {username}")
+            if twitter_service.reload_cookies_from_db(username):
+                logger.info(f"[COOKIE UPDATE] Successfully reloaded cookies for {username}")
+                return RefreshSessionResponse(
+                    success=True,
+                    message=f"Cookies updated and reloaded successfully ({len(twikit_cookies)} cookies)",
+                    username=username
+                )
+        else:
+            logger.info(f"[COOKIE UPDATE] Account not yet initialized, creating new client for {username}")
+
+        # Client not initialized or reload failed - initialize from the new cookies
+        if await twitter_service.initialize_from_cookies(username):
+            logger.info(f"[COOKIE UPDATE] Successfully initialized account {username} from new cookies")
+            return RefreshSessionResponse(
+                success=True,
+                message=f"Cookies saved and account initialized successfully ({len(twikit_cookies)} cookies)",
+                username=username
+            )
+        else:
+            # Failed to initialize - this is a critical failure
+            logger.error(f"[COOKIE UPDATE] FAILED to initialize account {username} from cookies")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Cookies saved to database but failed to initialize client for {username}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update cookies: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)

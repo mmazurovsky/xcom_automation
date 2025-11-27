@@ -27,16 +27,36 @@ class TwitterService:
         """
         Initialize Twitter client for all configured accounts.
         Load existing sessions or authenticate if needed.
+        Also initializes accounts that have cookies in MongoDB but no credentials.
         """
+        # First, initialize accounts with credentials
         accounts = settings.get_twitter_accounts()
-        logger.info(f"Initializing {len(accounts)} Twitter account(s)...")
+        logger.info(f"Initializing {len(accounts)} configured account(s)...")
 
+        initialized_usernames = set()
         for account in accounts:
             try:
                 await self._initialize_account(account)
+                initialized_usernames.add(account.username)
             except Exception as e:
                 logger.error(f"Failed to initialize account {account.username}: {e}")
                 # Continue with other accounts even if one fails
+
+        # Then, initialize accounts that have cookies in MongoDB but no credentials
+        db_usernames = cookie_db.get_all_usernames()
+        cookie_only_accounts = [u for u in db_usernames if u not in initialized_usernames]
+
+        if cookie_only_accounts:
+            logger.info(f"Initializing {len(cookie_only_accounts)} account(s) from cookies only...")
+            for username in cookie_only_accounts:
+                try:
+                    success = await self.initialize_from_cookies(username)
+                    if success:
+                        initialized_usernames.add(username)
+                except Exception as e:
+                    logger.error(f"Failed to initialize account {username} from cookies: {e}")
+
+        logger.info(f"Total initialized accounts: {len(initialized_usernames)}")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -115,6 +135,100 @@ class TwitterService:
             return True
         except Exception as e:
             logger.error(f"Failed to refresh session for {username}: {e}")
+            return False
+
+    def reload_cookies_from_db(self, username: str) -> bool:
+        """
+        Reload cookies from MongoDB into the in-memory client.
+        Creates a fresh client instance to ensure no stale cookie state.
+
+        Args:
+            username: Twitter username
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if username not in self.clients:
+            logger.debug(f"Account {username} not in clients, skipping reload")
+            return False
+
+        try:
+            # Load cookies from MongoDB
+            cookies = cookie_db.load_cookies(username)
+
+            if not cookies:
+                logger.error(f"No cookies found in database for {username}")
+                return False
+
+            # Create fresh client to ensure no stale cookie state
+            proxy_url = settings.get_proxy_url()
+            if proxy_url:
+                new_client = Client('en-US', proxy=proxy_url)
+            else:
+                new_client = Client('en-US')
+
+            # Set cookies in the fresh client
+            new_client.set_cookies(cookies)
+
+            # Replace old client with new one
+            self.clients[username] = new_client
+            logger.info(f"Reloaded cookies with fresh client for: {username}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to reload cookies for {username}: {e}")
+            return False
+
+    async def initialize_from_cookies(self, username: str) -> bool:
+        """
+        Initialize an account using cookies from the database.
+        Use this when you have cookies but no email/password credentials.
+
+        Args:
+            username: Twitter username
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            logger.info(f"[INIT] Starting initialization for {username} from cookies")
+
+            # Load cookies from MongoDB
+            cookies = cookie_db.load_cookies(username)
+
+            if not cookies:
+                logger.error(f"[INIT] FAILED - No cookies found in database for {username}")
+                return False
+
+            # Create client with proxy if configured
+            proxy_url = settings.get_proxy_url()
+            if proxy_url:
+                logger.info(f"[INIT] Using proxy for account {username}")
+                client = Client('en-US', proxy=proxy_url)
+            else:
+                logger.warning(f"[INIT] No proxy configured - using direct connection for {username}")
+                client = Client('en-US')
+
+            # Set cookies in the client
+            client.set_cookies(cookies)
+            logger.info(f"[INIT] Cookies set in client for {username}")
+
+            # Make a verification call to initialize client's internal state
+            # This triggers the transaction system initialization
+            try:
+                user = await client.user_by_screen_name(username)
+                logger.info(f"[INIT] Session verified for {username}: {user.name}")
+            except Exception as verify_error:
+                logger.info(f"[INIT] Skipping session verification for {username} (not critical): {verify_error}")
+                # Continue anyway - cookies should still work for posting
+
+            # Store client instance
+            self.clients[username] = client
+            logger.info(f"[INIT] ✓ Account {username} initialized successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"[INIT] ✗ FAILED to initialize account {username}: {e}", exc_info=True)
             return False
 
     def get_client(self, username: str) -> Optional[Client]:

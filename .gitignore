@@ -51,3 +51,4 @@ Thumbs.db
 cookies_*.json
 *.cookies.json
 cookies.json
+update_cookies.sh
